@@ -1,0 +1,25 @@
+[package]
+name = "usbip-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+iced = { version = "0.12", features = ["tokio"] }
+get_if_addrs = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[package.metadata.deb]
+maintainer = "usbip-client"
+depends = "$auto, usbip"
+assets = [
+  ["target/release/usbip-client", "usr/bin/usbip-client", "755"],
+  ["packaging/usbip-client.desktop", "usr/share/applications/usbip-client.desktop", "644"],
+  ["packaging/usbip-client.svg", "usr/share/icons/hicolor/scalable/apps/usbip-client.svg", "644"],
+]
+

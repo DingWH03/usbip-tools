@@ -1,0 +1,31 @@
+[Unit]
+Description=usbip-server (web manager)
+After=network.target systemd-udevd.service
+Wants=systemd-udevd.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Ensure kernel modules are loaded on each start
+ExecStartPre=/sbin/modprobe usbip-core
+ExecStartPre=/sbin/modprobe usbip-host
+
+# Create /var/lib/usbip-server automatically
+StateDirectory=usbip-server
+
+# Optional: allow overriding listen addr / bins
+Environment=RUST_LOG=info
+
+# Installed by deb to /usr/bin/usbip-server
+ExecStart=/usr/bin/usbip-server --listen 0.0.0.0:8080 --discovery-udp 0.0.0.0:3240 --state-dir /var/lib/usbip-server --manage-usbipd true
+
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
+

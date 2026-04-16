@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes" />
+    <title>usbip-server</title>
+    <style>
+      :root {
+        --bg: #fafbfc;
+        --panel: #ffffff;
+        --text: #1e293b;
+        --muted: #64748b;
+        --border: #e2e8f0;
+        --accent: #2563eb;
+        --ok: #10b981;
+        --warn: #f59e0b;
+        --bad: #ef4444;
+        --hover: #f1f5f9;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0b1120;
+          --panel: #1e293b;
+          --text: #e2e8f0;
+          --muted: #94a3b8;
+          --border: #334155;
+          --accent: #3b82f6;
+          --ok: #10b981;
+          --warn: #f59e0b;
+          --bad: #f87171;
+          --hover: #1e293b;
+        }
+      }
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, monospace;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+        padding: 2rem;
+        min-height: 100vh;
+      }
+      .app { max-width: 1440px; margin: 0 auto; }
+      .top-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .logo-area h1 {
+        font-size: 1.4rem;
+        font-weight: 500;
+        letter-spacing: -0.5px;
+        color: var(--text);
+        margin: 0;
+      }
+      .logo-area .subhead {
+        color: var(--muted);
+        font-size: 0.75rem;
+        margin-top: 2px;
+      }
+      .controls {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      input, button {
+        font-family: inherit;
+        font-size: 0.8rem;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        padding: 0.4rem 0.8rem;
+        border-radius: 4px;
+        outline: none;
+        transition: all 0.1s;
+      }
+      input:focus { border-color: var(--accent); }
+      button {
+        cursor: pointer;
+        background: var(--panel);
+        font-weight: 500;
+      }
+      button:hover {
+        background: var(--hover);
+        border-color: var(--accent);
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+      button.primary:hover { opacity: 0.9; }
+      .search-wrapper {
+        display: flex;
+        align-items: center;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--panel);
+      }
+      .search-wrapper input {
+        border: none;
+        background: transparent;
+        padding: 0.4rem 0.8rem;
+        min-width: 240px;
+      }
+      .search-wrapper button {
+        border: none;
+        border-left: 1px solid var(--border);
+        border-radius: 0;
+        background: transparent;
+      }
+      .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: 8px;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+      .dashboard {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        gap: 1.2rem;
+      }
+      @media (max-width: 900px) {
+        .dashboard { grid-template-columns: 1fr; }
+        body { padding: 1rem; }
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .card-header {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: var(--bg);
+      }
+      .card-header h2 {
+        font-weight: 500;
+        font-size: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--muted);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8rem;
+      }
+      th {
+        text-align: left;
+        padding: 0.5rem 1rem;
+        background: var(--bg);
+        color: var(--muted);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        border-bottom: 1px solid var(--border);
+      }
+      td {
+        padding: 0.6rem 1rem;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+      }
+      tr:last-child td { border-bottom: none; }
+      tr:hover td { background: var(--hover); }
+      .mono { font-family: inherit; }
+      .badge {
+        display: inline-block;
+        padding: 0.15rem 0.5rem;
+        border-radius: 3px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        border: 1px solid;
+        text-transform: uppercase;
+      }
+      .badge-ok { color: var(--ok); border-color: var(--ok); background: rgba(16, 185, 129, 0.05); }
+      .badge-warn { color: var(--warn); border-color: var(--warn); background: rgba(245, 158, 11, 0.05); }
+      .badge-bad { color: var(--bad); border-color: var(--bad); background: rgba(239, 68, 68, 0.05); }
+      .chip-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 4px;
+      }
+      .chip {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        padding: 0.1rem 0.4rem;
+        border-radius: 3px;
+        font-size: 0.7rem;
+      }
+      .action-group {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .action-btn {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 0.2rem 0.6rem;
+        border-radius: 3px;
+        font-size: 0.7rem;
+        cursor: pointer;
+      }
+      .action-btn:hover {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+      .debug-info {
+        font-size: 0.65rem;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .footer-note {
+        margin-top: 1.5rem;
+        text-align: right;
+        font-size: 0.7rem;
+        color: var(--muted);
+        border-top: 1px solid var(--border);
+        padding-top: 0.75rem;
+      }
+      summary {
+        cursor: pointer;
+        padding: 0.5rem 1rem;
+        background: var(--bg);
+        color: var(--muted);
+        font-size: 0.75rem;
+        border-top: 1px solid var(--border);
+      }
+      pre {
+        background: var(--bg);
+        padding: 0.75rem;
+        margin: 0;
+        overflow: auto;
+        font-size: 0.7rem;
+        border-top: 1px solid var(--border);
+      }
+      .rule-note {
+        font-weight: 500;
+        margin-bottom: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="top-bar">
+        <div class="logo-area">
+          <h1>usbip-server</h1>
+          <div class="subhead">USB/IP device manager · bind & rules</div>
+        </div>
+        <div class="controls">
+          <div class="search-wrapper">
+            <input type="search" id="q" placeholder="filter busid/serial/vid:pid…" />
+            <button id="refreshBtn" title="refresh">↻</button>
+          </div>
+          <button class="primary" id="applyBtn">apply rules</button>
+          <div class="filter-group">
+            <label style="display:flex; align-items:center; gap:4px;">
+              <input type="checkbox" id="onlyFree" /> only free
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="dashboard">
+        <!-- 设备卡片 -->
+        <div class="card">
+          <div class="card-header">
+            <h2>devices</h2>
+            <span id="deviceCount" class="muted">—</span>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>busid</th>
+                  <th>device</th>
+                  <th>identifiers</th>
+                  <th>status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="devicesBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 规则卡片 -->
+        <div class="card">
+          <div class="card-header">
+            <h2>rules</h2>
+            <span id="ruleCount" class="muted">—</span>
+          </div>
+          <div class="table-container" style="max-height: 400px; overflow-y: auto;">
+            <table>
+              <thead>
+                <tr><th>match / note</th><th style="width:80px;"></th></tr>
+              </thead>
+              <tbody id="rulesBody"></tbody>
+            </table>
+          </div>
+          <details>
+            <summary>raw JSON</summary>
+            <pre id="rulesRaw"></pre>
+          </details>
+        </div>
+      </div>
+
+    </div>
+
+    <script>
+      (function(){
+        "use strict";
+
+        const $ = id => document.getElementById(id);
+        const state = {
+          devices: [],
+          rules: { rules: [] },
+          filterQuery: '',
+          onlyFree: false
+        };
+
+        const qInput = $('q');
+        const onlyFreeChk = $('onlyFree');
+        const refreshBtn = $('refreshBtn');
+        const applyBtn = $('applyBtn');
+        const devicesBody = $('devicesBody');
+        const rulesBody = $('rulesBody');
+        const rulesRaw = $('rulesRaw');
+        const deviceCount = $('deviceCount');
+        const ruleCount = $('ruleCount');
+
+        function fmtVidPid(vid, pid) {
+          if (vid == null || pid == null) return '';
+          return vid.toString(16).padStart(4,'0') + ':' + pid.toString(16).padStart(4,'0');
+        }
+
+        function deviceSearchText(d) {
+          return [d.busid, d.serial, d.manufacturer, d.product, d.vid&&d.pid?fmtVidPid(d.vid,d.pid):'']
+            .filter(Boolean).join(' ').toLowerCase();
+        }
+
+        function renderDevices() {
+          const q = state.filterQuery.toLowerCase();
+          const filtered = state.devices.filter(d => {
+            if (q && !deviceSearchText(d).includes(q)) return false;
+            if (state.onlyFree && (d.in_use || !d.exported)) return false;
+            return true;
+          });
+
+          deviceCount.textContent = `${filtered.length}/${state.devices.length}`;
+
+          if (!filtered.length) {
+            devicesBody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--muted);">no devices</td></tr>`;
+            return;
+          }
+
+          devicesBody.innerHTML = filtered.map(d => {
+            const name = [d.manufacturer, d.product].filter(Boolean).join(' · ') || '—';
+            const vidpid = d.vid && d.pid ? fmtVidPid(d.vid, d.pid) : null;
+            const idents = [];
+            if (d.serial) idents.push(`serial=${d.serial}`);
+            if (d.devpath) idents.push(`devpath=${d.devpath.split('/').pop()}`);
+            if (vidpid) idents.push(`vidpid=${vidpid}`);
+
+            let status = '';
+            if (!d.exported) status = `<span class="badge badge-bad">not exported</span>`;
+            else if (d.in_use) status = `<span class="badge badge-warn">in use</span>${d.remote?` ${d.remote}`:''}`;
+            else status = `<span class="badge badge-ok">free</span>`;
+
+            const chips = [];
+            if (vidpid) chips.push(`<span class="chip">${vidpid}</span>`);
+            if (d.serial) chips.push(`<span class="chip">sn:${d.serial.slice(0,6)}…</span>`);
+
+            const action = d.exported
+              ? `<button class="action-btn" data-action="unbind" data-busid="${d.busid}">unbind</button>`
+              : `<button class="action-btn" data-action="bind" data-busid="${d.busid}">bind</button>`;
+
+            return `<tr>
+              <td class="mono">${d.busid}</td>
+              <td><div style="font-weight:500;">${name}</div><div class="chip-group">${chips.join('')}</div></td>
+              <td class="mono" style="font-size:0.75rem;">${idents.map(s=>`<div>${s}</div>`).join('')||'—'}</td>
+              <td>${status}<div class="debug-info">exported:${d.exported} in_use:${d.in_use}</div></td>
+              <td><div class="action-group">${action}</div></td>
+            </tr>`;
+          }).join('');
+        }
+
+        function renderRules() {
+          const rules = state.rules.rules || [];
+          ruleCount.textContent = rules.length;
+          rulesRaw.textContent = JSON.stringify(state.rules, null, 2);
+
+          if (!rules.length) {
+            rulesBody.innerHTML = `<tr><td colspan="2" style="padding:2rem;text-align:center;color:var(--muted);">no rules</td></tr>`;
+            return;
+          }
+
+          rulesBody.innerHTML = rules.map(r => {
+            const m = r.match || r.match_spec || {};
+            const parts = [];
+            if (m.serial) parts.push(`serial=${m.serial}`);
+            if (m.devpath) parts.push(`devpath=${m.devpath.split('/').pop()}`);
+            if (m.vid&&m.pid) parts.push(`vidpid=${m.vid.toString(16).padStart(4,'0')}:${m.pid.toString(16).padStart(4,'0')}`);
+            const matchStr = parts.join(' · ') || '(empty)';
+            const enabled = r.enabled !== false;
+            const note = r.note || '';
+            return `<tr>
+              <td>
+                <div class="rule-note">${note || '—'} ${!enabled?'<span style="color:var(--bad);">[disabled]</span>':''}</div>
+                <div class="mono" style="font-size:0.7rem;color:var(--muted);">${matchStr}</div>
+                <div style="font-size:0.6rem;color:var(--muted);">${r.id.slice(0,8)}</div>
+              </td>
+              <td><div class="action-group">
+                <button class="action-btn" data-action="toggleRule" data-id="${r.id}" data-enabled="${!enabled}">${enabled?'disable':'enable'}</button>
+                <button class="action-btn" data-action="deleteRule" data-id="${r.id}">del</button>
+              </div></td>
+            </tr>`;
+          }).join('');
+        }
+
+        async function fetchJSON(url, options={}) {
+          const res = await fetch(url, options);
+          if (!res.ok) throw new Error(await res.text());
+          return res.headers.get('content-type')?.includes('application/json') ? res.json() : null;
+        }
+
+        async function loadData() {
+          try {
+            const [devices, rules] = await Promise.all([fetchJSON('/api/devices'), fetchJSON('/api/rules')]);
+            state.devices = devices || [];
+            state.rules = rules || { rules: [] };
+            renderDevices();
+            renderRules();
+          } catch(e) {
+            console.warn(e);
+          }
+        }
+
+        async function handleAction(action, payload) {
+          try {
+            if (action === 'bind') await fetchJSON('/api/bind', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+            else if (action === 'unbind') await fetchJSON('/api/unbind', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+            else if (action === 'toggleRule') await fetchJSON('/api/rules/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+            else if (action === 'deleteRule') {
+              if (!confirm('delete rule?')) return;
+              await fetchJSON('/api/rules/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+            }
+            await loadData();
+          } catch(e) { alert(e.message); }
+        }
+
+        document.addEventListener('click', e => {
+          const btn = e.target.closest('[data-action]');
+          if (!btn) return;
+          const {action, busid, id, enabled} = btn.dataset;
+          if (action === 'bind' || action === 'unbind') handleAction(action, {busid});
+          else if (action === 'toggleRule') handleAction('toggleRule', {id, enabled: enabled==='true'});
+          else if (action === 'deleteRule') handleAction('deleteRule', {id});
+        });
+
+        function init() {
+          loadData();
+          refreshBtn.addEventListener('click', loadData);
+          applyBtn.addEventListener('click', async () => {
+            try { await fetchJSON('/api/apply', {method:'POST'}); await loadData(); }
+            catch(e) { alert(e.message); }
+          });
+          let timer;
+          qInput.addEventListener('input', () => {
+            state.filterQuery = qInput.value;
+            clearTimeout(timer);
+            timer = setTimeout(renderDevices, 150);
+          });
+          onlyFreeChk.addEventListener('change', () => {
+            state.onlyFree = onlyFreeChk.checked;
+            renderDevices();
+          });
+        }
+        init();
+      })();
+    </script>
+  </body>
+</html>

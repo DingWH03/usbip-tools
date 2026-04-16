@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=usbip-client
+Comment=USB/IP client (iced GUI)
+Exec=/usr/bin/usbip-client
+Icon=usbip-client
+Terminal=false
+Categories=System;Utility;
+
