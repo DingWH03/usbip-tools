@@ -3,12 +3,16 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use axum::{
     extract::State,
-    http::StatusCode,
-    response::{Html, IntoResponse},
+    body::Body,
+    extract::OriginalUri,
+    http::{header, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     response::sse::{Event, Sse},
     routing::{get, post},
     Json, Router,
 };
+use include_dir::{include_dir, Dir};
+use mime_guess::MimeGuess;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -33,17 +37,20 @@ pub struct AppState {
 }
 
 pub async fn serve(listen: SocketAddr, state: AppState) -> Result<()> {
+    let api = Router::new()
+        .route("/events", get(api_events))
+        .route("/devices", get(api_devices))
+        .route("/rules", get(api_get_rules).put(api_put_rules))
+        .route("/bind", post(api_bind))
+        .route("/unbind", post(api_unbind))
+        .route("/rules/add_for_busid", post(api_add_rule_for_busid))
+        .route("/rules/toggle", post(api_rules_toggle))
+        .route("/rules/delete", post(api_rules_delete))
+        .route("/apply", post(api_apply));
+
     let app = Router::new()
-        .route("/", get(index))
-        .route("/api/events", get(api_events))
-        .route("/api/devices", get(api_devices))
-        .route("/api/rules", get(api_get_rules).put(api_put_rules))
-        .route("/api/bind", post(api_bind))
-        .route("/api/unbind", post(api_unbind))
-        .route("/api/rules/add_for_busid", post(api_add_rule_for_busid))
-        .route("/api/rules/toggle", post(api_rules_toggle))
-        .route("/api/rules/delete", post(api_rules_delete))
-        .route("/api/apply", post(api_apply))
+        .nest("/api", api)
+        .fallback(ui_fallback)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -53,11 +60,44 @@ pub async fn serve(listen: SocketAddr, state: AppState) -> Result<()> {
     Ok(())
 }
 
-async fn index() -> impl IntoResponse {
-    Html(INDEX_HTML)
+static UI_DIST: Dir<'static> = include_dir!("$OUT_DIR/ui-dist");
+
+async fn ui_fallback(OriginalUri(uri): OriginalUri) -> Response {
+    let req_path = uri.path().trim_start_matches('/');
+    let req_path = if req_path.is_empty() { "index.html" } else { req_path };
+
+    if let Some(file) = UI_DIST.get_file(req_path) {
+        return respond_file(req_path, file.contents());
+    }
+
+    // SPA fallback: any unknown route returns index.html.
+    match UI_DIST.get_file("index.html") {
+        Some(index) => respond_file("index.html", index.contents()),
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "ui dist missing index.html").into_response(),
+    }
 }
 
-static INDEX_HTML: &str = include_str!("../assets/index.html");
+fn respond_file(path: &str, bytes: &[u8]) -> Response {
+    let mime = MimeGuess::from_path(path).first_or_octet_stream();
+    let mut res = Response::new(Body::from(bytes.to_vec()));
+
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime.as_ref()).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+
+    let cache = if path == "index.html" {
+        "no-cache"
+    } else if path.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=300"
+    };
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+
+    res
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct DeviceView {
