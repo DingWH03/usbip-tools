@@ -2,7 +2,7 @@
 Type=Application
 Name=usbip-client
 Comment=USB/IP client (iced GUI)
-Exec=/usr/bin/usbip-client
+Exec=/usr/bin/usbip-client --ui
 Icon=usbip-client
 Terminal=false
 Categories=System;Utility;
