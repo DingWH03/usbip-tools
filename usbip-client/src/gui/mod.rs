@@ -258,15 +258,9 @@ impl Application for UsbIpClient {
                 return Command::perform(
                     async move {
                         let c = Client::new(PrivilegeMode::GuiPkexec);
-                        c.ensure_vhci_loaded().await.map_err(|e| format!("{e:#}"))?;
-                        let mut ok = Vec::new();
-                        for b in busids {
-                            match c.attach(&host, &b).await {
-                                Ok(_) => ok.push(format!("attach 成功: {host} {b}")),
-                                Err(e) => ok.push(format!("attach 失败: {host} {b}: {e:#}")),
-                            }
-                        }
-                        Ok(ok)
+                        c.attach_many(&host, &busids)
+                            .await
+                            .map_err(|e| format!("{e:#}"))
                     },
                     Msg::Attached,
                 );

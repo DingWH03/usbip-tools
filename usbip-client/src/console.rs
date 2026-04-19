@@ -1,8 +1,20 @@
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 use crate::core::{Client, PrivilegeMode};
 use crate::discovery;
+
+/// 将 `attach_many` 返回的中文日志行转成 REPL/link 子命令使用的 `OK`/`FAIL` 格式。
+fn line_batch_to_repl_console(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("attach 成功: ") {
+        format!("OK {}", rest)
+    } else if let Some(rest) = line.strip_prefix("attach 失败: ") {
+        format!("FAIL {}", rest)
+    } else {
+        line.to_string()
+    }
+}
 
 pub fn run_console(args: Vec<String>) -> Result<()> {
     if let Some(cmd) = args.get(0).map(|s| s.as_str()) {
@@ -93,12 +105,9 @@ fn cmd_link(rest: &[String]) -> Result<()> {
     let rt = tokio_rt()?;
     rt.block_on(async {
         let c = Client::new(PrivilegeMode::ConsoleSudo);
-        c.ensure_vhci_loaded().await?;
-        for b in busids {
-            match c.attach(host, &b).await {
-                Ok(_) => println!("OK {host} {b}"),
-                Err(e) => println!("FAIL {host} {b}: {e:#}"),
-            }
+        let lines = c.attach_many(host, &busids).await?;
+        for line in lines {
+            println!("{}", line_batch_to_repl_console(&line));
         }
         Ok(())
     })
@@ -196,12 +205,28 @@ fn run_repl() -> Result<()> {
                 println!("Connecting {} device(s)...", targets.len());
                 let res = rt.block_on(async {
                     let c = Client::new(PrivilegeMode::ConsoleSudo);
-                    c.ensure_vhci_loaded().await?;
-                    let mut results = Vec::new();
+                    let mut host_order: Vec<String> = Vec::new();
+                    let mut by_host: HashMap<String, Vec<String>> = HashMap::new();
                     for t in targets {
-                        match c.attach(&t.host, &t.busid).await {
-                            Ok(_) => results.push(format!("OK {} {}", t.host, t.busid)),
-                            Err(e) => results.push(format!("FAIL {} {}: {:#}", t.host, t.busid, e)),
+                        if !by_host.contains_key(&t.host) {
+                            host_order.push(t.host.clone());
+                        }
+                        by_host.entry(t.host).or_default().push(t.busid);
+                    }
+                    let mut results = Vec::new();
+                    for host in host_order {
+                        let busids = by_host.remove(&host).unwrap_or_default();
+                        match c.attach_many(&host, &busids).await {
+                            Ok(lines) => {
+                                for line in lines {
+                                    results.push(line_batch_to_repl_console(&line));
+                                }
+                            }
+                            Err(e) => {
+                                for b in busids {
+                                    results.push(format!("FAIL {host} {b}: {e:#}"));
+                                }
+                            }
                         }
                     }
                     Ok::<_, anyhow::Error>(results)

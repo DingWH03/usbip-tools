@@ -35,12 +35,9 @@ impl Client {
         self.usb.list_remote_devices(host).await
     }
 
-    pub async fn ensure_vhci_loaded(&self) -> Result<()> {
-        self.usb.ensure_vhci_loaded(self.mode).await
-    }
-
-    pub async fn attach(&self, host: &str, busid: &str) -> Result<()> {
-        self.usb.attach(self.mode, host, busid).await
+    /// 单次提权批量 attach（GUI/控制台均少弹密码）。
+    pub async fn attach_many(&self, host: &str, busids: &[String]) -> Result<Vec<String>> {
+        self.usb.attach_many(self.mode, host, busids).await
     }
 }
 

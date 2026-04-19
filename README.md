@@ -17,6 +17,7 @@
 
 - 优先使用 `pkexec` 弹出提权对话框
 - 如果没有 `pkexec` 或失败，再尝试 `sudo -E`
+- 一次选择多个设备 attach 时，会在**单次提权**内顺序执行 `modprobe`（若需要）与多次 `usbip attach`，避免每个设备各弹一次密码
 
 如果你的系统没有 polkit agent，安装后再试：
 

@@ -1,10 +1,25 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use tokio::process::Command;
 
 use crate::core::PrivilegeMode;
+
+/// pkexec 失败时根据 stderr 追加的 GUI 提示（与单条 attach 一致）
+fn pkexec_stderr_hint(stderr: &str) -> &'static str {
+    let low = stderr.to_lowercase();
+    if low.contains("no authentication agent found")
+        || low.contains("no session")
+        || low.contains("agent")
+    {
+        return "（提示：看起来缺少/未启动 polkit 认证代理。KDE 可安装并启动 polkit agent，例如包 `polkit-kde-agent-1`。）";
+    }
+    if low.contains("cannot open display") || low.contains("display") {
+        return "（提示：pkexec 无法连接到图形会话 DISPLAY/WAYLAND。请从桌面会话启动，或检查环境变量/桌面文件 Exec。）";
+    }
+    ""
+}
 
 #[derive(Debug, Clone)]
 pub struct UsbIp {
@@ -48,20 +63,23 @@ fn pick_pkexec_bin() -> Option<&'static str> {
     None
 }
 
-async fn run_output_with_privilege(
+async fn run_output_with_privilege_os(
     mode: PrivilegeMode,
-    bin: &str,
-    args: &[&str],
+    program: &str,
+    args: &[String],
 ) -> Result<std::process::Output> {
+    let cmdline = std::iter::once(program.to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
+
     // Fast path: already root.
     if is_root() {
-        return Command::new(bin).args(args).output().await.with_context(|| {
-            format!(
-                "执行失败: {} {}",
-                bin,
-                args.iter().copied().collect::<Vec<_>>().join(" ")
-            )
-        });
+        return Command::new(program)
+            .args(args)
+            .output()
+            .await
+            .with_context(|| format!("执行失败: {cmdline}"));
     }
 
     // Linux: prefer polkit (pkexec), fallback to sudo.
@@ -74,19 +92,13 @@ async fn run_output_with_privilege(
                 let pkexec_bin = pick_pkexec_bin().unwrap_or("pkexec");
                 let mut pk = Command::new(pkexec_bin);
                 apply_desktop_session_env(&mut pk);
-                if Path::new(bin).is_absolute() {
-                    pk.arg(bin);
+                if Path::new(program).is_absolute() {
+                    pk.arg(program);
                 } else {
-                    // If not absolute, still try; pkexec will search its PATH (may differ from user PATH).
-                    pk.arg(bin);
+                    pk.arg(program);
                 }
                 pk.args(args);
                 let out = pk.output().await.with_context(|| {
-                    let cmdline = format!(
-                        "{} {}",
-                        bin,
-                        args.iter().copied().collect::<Vec<_>>().join(" ")
-                    );
                     let mut hint = String::new();
                     if pick_pkexec_bin().is_none() {
                         hint.push_str(
@@ -100,14 +112,10 @@ async fn run_output_with_privilege(
             PrivilegeMode::ConsoleSudo => {
                 let mut su = Command::new("sudo");
                 // Do NOT use -E here by default; keep it minimal and let sudo prompt in TTY.
-                su.arg(bin);
+                su.arg(program);
                 su.args(args);
                 let out = su.output().await.with_context(|| {
-                    format!(
-                        "执行失败（sudo）: {} {}",
-                        bin,
-                        args.iter().copied().collect::<Vec<_>>().join(" ")
-                    )
+                    format!("执行失败（sudo）: {cmdline}")
                 })?;
                 return Ok(out);
             }
@@ -116,7 +124,7 @@ async fn run_output_with_privilege(
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (bin, args);
+        let _ = (program, args);
         Err(anyhow!("该平台尚未实现按需提权执行（后续支持 Windows 时在这里适配）"))
     }
 }
@@ -144,25 +152,6 @@ impl Default for UsbIp {
 }
 
 impl UsbIp {
-    pub async fn ensure_vhci_loaded(&self, mode: PrivilegeMode) -> Result<()> {
-        // 如果模块已经加载，不要每次都重复 modprobe（也避免在某些环境下 modprobe 不存在时报错）。
-        if is_vhci_loaded() {
-            return Ok(());
-        }
-
-        // Best effort; if it fails we still try attach (may fail with a clearer error).
-        let out = run_output_with_privilege(mode, &self.modprobe_bin, &["vhci-hcd"])
-            .await
-            .context("modprobe vhci-hcd")?;
-        if !out.status.success() {
-            tracing::warn!(
-                "modprobe vhci-hcd failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-        Ok(())
-    }
-
     pub async fn list_remote_devices(&self, host: &str) -> Result<Vec<RemoteDevice>> {
         let out = Command::new(&self.usbip_bin)
             .arg("list")
@@ -181,40 +170,97 @@ impl UsbIp {
         Ok(parse_devices_from_usbip_list_remote(&s))
     }
 
-    pub async fn attach(&self, mode: PrivilegeMode, host: &str, busid: &str) -> Result<()> {
-        let out =
-            run_output_with_privilege(mode, &self.usbip_bin, &["attach", "-r", host, "-b", busid])
-                .await
-                .context("usbip attach")?;
+    /// 单次提权内依次 modprobe（若 sysfs 显示未加载）并对每个 busid 执行 `usbip attach`。
+    /// 返回与原先循环 attach 相同风格的日志行（`attach 成功/失败: host busid`）。
+    pub async fn attach_many(
+        &self,
+        mode: PrivilegeMode,
+        host: &str,
+        busids: &[String],
+    ) -> Result<Vec<String>> {
+        // 无设备且 vhci 已就绪：无需提权。
+        if busids.is_empty() && is_vhci_loaded() {
+            return Ok(Vec::new());
+        }
+
+        const BATCH_SCRIPT: &str = r#"modprobe="$1"
+usbip="$2"
+host="$3"
+shift 3
+if [ ! -d /sys/module/vhci_hcd ] && [ ! -d /sys/module/vhci-hcd ] && [ ! -d /sys/bus/platform/drivers/vhci_hcd ]; then
+  "$modprobe" vhci-hcd 2>/dev/null || true
+fi
+for b in "$@"; do
+  if "$usbip" attach -r "$host" -b "$b"; then
+    echo "USBIP_BATCH_OK $b"
+  else
+    echo "USBIP_BATCH_FAIL $b"
+  fi
+done"#;
+
+        let mut argv: Vec<String> = vec![
+            "-c".to_string(),
+            BATCH_SCRIPT.to_string(),
+            "_".to_string(),
+            self.modprobe_bin.clone(),
+            self.usbip_bin.clone(),
+            host.to_string(),
+        ];
+        argv.extend(busids.iter().cloned());
+
+        let out = run_output_with_privilege_os(mode, "/bin/sh", &argv)
+            .await
+            .context("usbip attach (batch)")?;
+
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             if mode == PrivilegeMode::GuiPkexec {
-                let mut hint = String::new();
-                let low = stderr.to_lowercase();
-                if low.contains("no authentication agent found")
-                    || low.contains("no session")
-                    || low.contains("agent")
-                {
-                    hint.push_str("（提示：看起来缺少/未启动 polkit 认证代理。KDE 可安装并启动 polkit agent，例如包 `polkit-kde-agent-1`。）");
-                } else if low.contains("cannot open display") || low.contains("display") {
-                    hint.push_str("（提示：pkexec 无法连接到图形会话 DISPLAY/WAYLAND。请从桌面会话启动，或检查环境变量/桌面文件 Exec。）");
-                }
+                let hint = pkexec_stderr_hint(&stderr);
                 return Err(anyhow!(
-                    "usbip attach failed (GUI/pkexec) (host={}, busid={}): {}{}",
+                    "usbip attach batch failed (GUI/pkexec) (host={}): {}{}",
                     host,
-                    busid,
                     stderr.trim(),
                     hint
                 ));
             }
             return Err(anyhow!(
-                "usbip attach failed (console/sudo) (host={}, busid={}): {}",
+                "usbip attach batch failed (console/sudo) (host={}): {}",
                 host,
-                busid,
                 stderr.trim()
             ));
         }
-        Ok(())
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let mut seen: HashMap<String, bool> = HashMap::new();
+        for line in stdout.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("USBIP_BATCH_OK ") {
+                seen.insert(rest.trim().to_string(), true);
+            } else if let Some(rest) = t.strip_prefix("USBIP_BATCH_FAIL ") {
+                seen.insert(rest.trim().to_string(), false);
+            }
+        }
+
+        let stderr_tail = String::from_utf8_lossy(&out.stderr);
+        let stderr_hint = if stderr_tail.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", stderr_tail.trim())
+        };
+
+        let mut lines = Vec::with_capacity(busids.len());
+        for b in busids {
+            match seen.get(b) {
+                Some(true) => lines.push(format!("attach 成功: {host} {b}")),
+                Some(false) => lines.push(format!(
+                    "attach 失败: {host} {b}: usbip attach 返回非零{stderr_hint}"
+                )),
+                None => lines.push(format!(
+                    "attach 失败: {host} {b}: 批处理未返回状态（stdout 中缺少 USBIP_BATCH_* 行）{stderr_hint}"
+                )),
+            }
+        }
+        Ok(lines)
     }
 }
 
